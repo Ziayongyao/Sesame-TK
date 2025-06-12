@@ -1,110 +1,53 @@
-name: Build, Upload, and Sync
+name: Build and Publish APK to Release
 
 on:
-  release:
-    types: [published] # 自动触发同步
+  push:
+    tags:
+      - "*.*"  # 匹配类似 0.2-alpha 的 Tag 格式
+
+# 关键权限：必须声明写入权限才能创建 Release
+permissions:
+  contents: write  # 解决同步失败的核心配置[4,5](@ref)
 
 jobs:
-  build-and-sync:
+  build-and-publish:
     runs-on: ubuntu-latest
-
     steps:
-      # 获取短 SHA
-      - name: Get short SHA
-        run: echo "SHORT_SHA=${GITHUB_SHA::4}" >> $GITHUB_ENV
-      # 设置时区为亚洲/上海
-      - name: Set Timezone to Asia/Shanghai
-        run: |
-          sudo timedatectl set-timezone Asia/Shanghai
-          echo "Current time: $(date)"
-
-      # 检出代码
-      - name: Checkout
+      # 1. 检出代码
+      - name: Checkout code
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      # 设置JDK
+      # 2. 设置 JDK 24
       - name: Set up JDK
         uses: actions/setup-java@v4
         with:
-          java-version: "23"
-          distribution: "zulu"
-          cache: gradle
+          java-version: 24
+          distribution: temurin
+          cache: gradle  # 启用 Gradle 缓存加速构建
 
-      # 设置Gradle
-      - name: set up Gradle
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          cache-read-only: false
-          gradle-version: wrapper
+      # 3. 赋予 Gradle 执行权限
+      - name: Make Gradlew Executable
+        run: chmod +x ./gradlew
 
-      # 获取原仓库的预发行版属性
-      - name: Get Original Repository Pre-release Property
-        id: pre_release
+      # 4. 构建 Normal 和 Compatible 版本 APK
+      - name: Build APKs
         run: |
-          echo "IS_PRERELEASE=$(if [ "${{ github.event.release.prerelease }}" = true ]; then echo 'true'; else echo 'false'; fi)" >> $GITHUB_OUTPUT
+          ./gradlew :app:assembleNormalRelease
+          ./gradlew :app:assembleCompatibleRelease
 
-      # 赋予 Gradlew 执行权限
-      - name: Grant execute permission for gradlew
-        run: chmod +x gradlew
-
-      # 同时编译 Normal 和 Compatible APK
-      - name: Build Normal and Compatible APKs
-        run: |
-          ./gradlew assembleNormalRelease assembleCompatibleRelease -Pversion=${{ github.ref_name }}
-
-      - name: Sign Normal APK
-        id: sign_normal_apk
-        uses: ilharp/sign-android-release@v2
+      # 5. 发布到 GitHub Releases
+      - name: Publish to GitHub Releases
+        uses: softprops/action-gh-release@v1  # 推荐社区维护的 Action[5,7](@ref)
         with:
-          releaseDir: app/build/outputs/apk/normal/release/
-          signingKey: ${{ secrets.ANDROID_SIGNING_KEY }}
-          keyAlias: ${{ secrets.ANDROID_KEY_ALIAS }}
-          keyStorePassword: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          keyPassword: ${{ secrets.ANDROID_KEY_PASSWORD }}
-          buildToolsVersion: 36.0.0
-
-      - name: Sign Compatible APK
-        id: sign_compatible_apk
-        uses: ilharp/sign-android-release@v2
-        with:
-          releaseDir: app/build/outputs/apk/compatible/release/
-          signingKey: ${{ secrets.ANDROID_SIGNING_KEY }}
-          keyAlias: ${{ secrets.ANDROID_KEY_ALIAS }}
-          keyStorePassword: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          keyPassword: ${{ secrets.ANDROID_KEY_PASSWORD }}
-          buildToolsVersion: 36.0.0
-
-      - name: Generate APKS Checksum
-        run: |
-          sha256sum ${{ steps.sign_normal_apk.outputs.signedFile  }} > CHECKSUMS-Sesame-Normal-${{ github.event.release.tag_name || github.ref_name }}.${{ env.SHORT_SHA }}-signed.apk.sha256
-          sha256sum ${{ steps.sign_compatible_apk.outputs.signedFile }} > CHECKSUMS-Sesame-Compatible-${{ github.event.release.tag_name || github.ref_name }}.${{ env.SHORT_SHA }}-signed.apk.sha256
-
-      - name: Sync Release to Target Repository
-        uses: softprops/action-gh-release@v2
-        with:
-          repository: Sesame-TK # 目标仓库的拥有者和仓库名称
-          name: ${{ github.event.release.tag_name || github.ref_name }} # 发布的名称。默认为标签名称
           files: |
-            ${{ steps.sign_normal_apk.outputs.signedFile }}
-            ${{ steps.sign_compatible_apk.outputs.signedFile }}
-            CHECKSUMS-Sesame-Normal-${{ github.event.release.tag_name || github.ref_name }}.${{ env.SHORT_SHA }}-signed.apk.sha256
-            CHECKSUMS-Sesame-Compatible-${{ github.event.release.tag_name || github.ref_name }}.${{ env.SHORT_SHA }}-signed.apk.sha256
-          token: ${{ secrets.TARGET_REPO_PAT }}
-          tag_name: ${{ github.ref_name }}
-          draft: false
-          prerelease: ${{ steps.pre_release.outputs.IS_PRERELEASE }}
-          append_body: false
-          make_latest: true
+            app/build/outputs/apk/normal/release/*.apk
+            app/build/outputs/apk/compatible/release/*.apk
+          tag_name: ${{ github.ref_name }}  # 使用触发工作流的 Tag 名称
+          name: "Release ${{ github.ref_name }}"
           body: |
-            📦 本 Release 同步自源仓库 [Sesame-TK](https://github.com/${{ github.repository }})
-            ✨ **更新内容**:
-            ${{ github.event.release.body || '无更新说明' }}
-
-      - name: TgBot Notification
-        run: |
-          curl -X POST "https://api.telegram.org/bot${{ secrets.TG_BOT_TOKEN }}/sendMessage" \
-          -d "chat_id=${{ secrets.TG_CHAT_ID }}" \
-          -d "text=[${{ github.event.release.tag_name }}](${{ github.event.release.html_url }}) published successfully 🚀%0A%0A${{ github.event.release.body }}" \
-          -d "parse_mode=Markdown"
+            📦 Sesame-TK 自动构建版本 ${{ github.ref_name }}
+            - ​**Normal**: Android 8.0+
+            - ​**Compatible**: Android 5.1 - 7.0
+          draft: false
+          prerelease: false
+          overwrite: true  # 允许覆盖同名 Release[4](@ref)
