@@ -2,7 +2,7 @@ name: Android CI with Release
 
 on:
   push:
-    tags: ["v*.*"]  # 仅匹配v开头的语义化标签[7](@ref)
+    tags: ["*.*"]  # 仅匹配v开头的语义化标签[7](@ref)
   workflow_dispatch:
 
 permissions:
