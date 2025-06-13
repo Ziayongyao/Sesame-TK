@@ -2,55 +2,44 @@ name: Android CI with Release
 
 on:
   push:
-    tags: ["*.*"]  # 标签触发自动发布
-  workflow_dispatch:  # 支持手动触发
+    tags: ["*"]  # 标签触发自动发布
+  pull_request:
+    branches: [develop, main]  # PR 合并触发
+  workflow_dispatch:
 
+# 必须添加写入权限，否则无法创建 Release
 permissions:
-  contents: write  # Release 创建权限
+  contents: write
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 30  # 防止超时失败
 
     steps:
-      # 1. 环境初始化
       - name: Set Timezone to Asia/Shanghai
         run: |
           sudo timedatectl set-timezone Asia/Shanghai
           echo "Current time: $(date)"
 
-      - name: Checkout Code
+      - name: Checkout
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # 获取完整提交历史
+          fetch-depth: 0
 
-      # 2. 构建环境
-      - name: Set up JDK 24
+      - name: Set up JDK
         uses: actions/setup-java@v4
         with:
           java-version: "24"
           distribution: "zulu"
           cache: gradle
 
-      - name: Grant gradlew Permission
+      - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
-      # 3. 提取提交信息 (修复未定义步骤)
-      - name: Extract Commit Messages
-        id: commit_details
-        run: |
-          MESSAGE=$(git log -1 --pretty=%B | sed 's/"/\\"/g')
-          echo "COMMIT_MESSAGE_BODY<<EOF" >> $GITHUB_OUTPUT
-          echo "$MESSAGE" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
-
-      # 4. 构建 APK
       - name: Build APKs
         run: |
           ./gradlew assembleNormalRelease assembleCompatibleRelease -Pversion=${{ github.ref_name }}
 
-      # 5. 定位 APK 文件
       - name: Locate APKs
         id: locate_apks
         run: |
@@ -59,20 +48,17 @@ jobs:
           echo "normal_apk=$normal_apk" >> $GITHUB_OUTPUT
           echo "compatible_apk=$compatible_apk" >> $GITHUB_OUTPUT
 
-      # 6. 签名 APK (直接指定文件路径)
       - name: Sign APKs
         id: sign_apks
         uses: ilharp/sign-android-release@v2
         with:
-          files: |
-            ${{ steps.locate_apks.outputs.normal_apk }}
-            ${{ steps.locate_apks.outputs.compatible_apk }}
+          releaseDir: app/build/outputs/apk
           signingKey: ${{ secrets.ANDROID_SIGNING_KEY }}
           keyAlias: ${{ secrets.ANDROID_KEY_ALIAS }}
           keyStorePassword: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           keyPassword: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          buildToolsVersion: 36.0.0
 
-      # 7. 提取签名后路径
       - name: Extract Signed APK Paths
         id: extract_apks
         run: |
@@ -84,31 +70,32 @@ jobs:
               echo "signed_compatible=$file" >> $GITHUB_OUTPUT
             fi
           done
+          echo "all_files=${files[*]}" >> $GITHUB_OUTPUT
 
-      # 8. 生成校验文件
+      - name: Extract Version Info
+        id: extract_info
+        run: |
+          normal_file=$(basename "${{ steps.extract_apks.outputs.signed_normal }}")
+          version=$(echo "$normal_file" | sed -E 's/.*-(Normal|Compatible)-(.*)-signed\.apk/\2/')
+          echo "version=$version" >> $GITHUB_OUTPUT
+
       - name: Generate Checksums
         run: |
-          sha256sum "${{ steps.extract_apks.outputs.signed_normal }}" > "CHECKSUMS-Sesame-Normal-${{ github.ref_name }}-signed.apk.sha256"
-          sha256sum "${{ steps.extract_apks.outputs.signed_compatible }}" > "CHECKSUMS-Sesame-Compatible-${{ github.ref_name }}-signed.apk.sha256"
+          sha256sum "${{ steps.extract_apks.outputs.signed_normal }}" > "CHECKSUMS-Sesame-Normal-${{ steps.extract_info.outputs.version }}-signed.apk.sha256"
+          sha256sum "${{ steps.extract_apks.outputs.signed_compatible }}" > "CHECKSUMS-Sesame-Compatible-${{ steps.extract_info.outputs.version }}-signed.apk.sha256"
 
-      # 9. 创建 Release (修复参数错误)
-      - name: Create GitHub Release
-      ##  if: startsWith(github.ref, 'refs/tags/')  # 仅标签触发
-        uses: softprops/action-gh-release@v2
+      - name: Publish Release
+        uses: softprops/action-gh-release@v2  # 推荐 v2 版本[5](@ref)
         with:
-          tag_name: ${{ github.ref_name }}
-          name: "Release ${{ github.ref_name }}"
+          tag_name: ${{ steps.extract_tag.outputs.tag_name }}  # 使用原始标签名
+          name: "Release ${{ steps.extract_tag.outputs.tag_name }}"
           body: |
-            ## 📦 更新内容  
-            ${{ steps.commit_details.outputs.COMMIT_MESSAGE_BODY }}  
-
-            ## ⬇️ 下载说明  
-            - ​**Normal**: Android 8.0+  
-            - ​**Compatible**: Android 5.1-7.0  
-          files: |
-            ${{ steps.extract_apks.outputs.signed_normal }}
-            ${{ steps.extract_apks.outputs.signed_compatible }}
-            CHECKSUMS-*.sha256
+            ## 🚀 自动生成发布  
+            - ​**标签**: ${{ steps.extract_tag.outputs.tag_name }}  
+            - ​**提交**: [${{ github.sha }}](https://github.com/${{ github.repository }}/commit/${{ github.sha }})  
+          files: |  # 上传构建产物
+            dist/*.zip
+            # app/build/outputs/*.apk  # Android 项目路径示例
           draft: false
           prerelease: ${{ contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') }}
-          fail_on_unmatched_files: true  # 文件缺失时报错
+          generate_release_notes: true  # 自动生成更新日志[4](@ref)
