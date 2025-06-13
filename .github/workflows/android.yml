@@ -84,18 +84,21 @@ jobs:
           sha256sum "${{ steps.extract_apks.outputs.signed_normal }}" > "CHECKSUMS-Sesame-Normal-${{ steps.extract_info.outputs.version }}-signed.apk.sha256"
           sha256sum "${{ steps.extract_apks.outputs.signed_compatible }}" > "CHECKSUMS-Sesame-Compatible-${{ steps.extract_info.outputs.version }}-signed.apk.sha256"
 
-      - name: Publish Release
-        uses: softprops/action-gh-release@v2  # 推荐 v2 版本[5](@ref)
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.extract_tag.outputs.tag_name }}  # 使用原始标签名
-          name: "Release ${{ steps.extract_tag.outputs.tag_name }}"
+          tag_name: ${{ github.ref_name }}
+          name: "Release ${{ github.ref_name }}"
           body: |
-            ## 🚀 自动生成发布  
-            - ​**标签**: ${{ steps.extract_tag.outputs.tag_name }}  
-            - ​**提交**: [${{ github.sha }}](https://github.com/${{ github.repository }}/commit/${{ github.sha }})  
-          files: |  # 上传构建产物
-            dist/*.zip
-            # app/build/outputs/*.apk  # Android 项目路径示例
+            ## 📦 更新内容  
+            ${{ steps.commit_details.outputs.COMMIT_MESSAGE_BODY }}  
+
+            ## ⬇️ 下载说明  
+            - **Normal**: Android 8.0+  
+            - **Compatible**: Android 5.1-7.0  
+          files: |
+            ${{ steps.extract_apks.outputs.signed_normal }}
+            ${{ steps.extract_apks.outputs.signed_compatible }}
+            CHECKSUMS-*.sha256
           draft: false
           prerelease: ${{ contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') }}
-          generate_release_notes: true  # 自动生成更新日志[4](@ref)
