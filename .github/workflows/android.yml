@@ -2,7 +2,6 @@ name: Android CI with Release
 
 on:
   push:
-    branches: [develop, main]  # 添加分支触发
     tags: ["*.*"]  # 标签触发自动发布
   pull_request:
     branches: [develop, main]  # PR 合并触发
