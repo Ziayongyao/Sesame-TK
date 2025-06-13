@@ -85,14 +85,6 @@ jobs:
           sha256sum "${{ steps.extract_apks.outputs.signed_normal }}" > "CHECKSUMS-Sesame-Normal-${{ steps.extract_info.outputs.version }}-signed.apk.sha256"
           sha256sum "${{ steps.extract_apks.outputs.signed_compatible }}" > "CHECKSUMS-Sesame-Compatible-${{ steps.extract_info.outputs.version }}-signed.apk.sha256"
 
-      - name: Get Commit Details
-        id: commit_details
-        run: |
-          COMMIT_MESSAGE_BODY=$(git log -1 --format="%h: %s by %an")
-          echo "COMMIT_MESSAGE_BODY<<EOF" >> $GITHUB_OUTPUT
-          echo "$COMMIT_MESSAGE_BODY" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
-
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
