@@ -86,8 +86,11 @@ jobs:
           sha256sum "${{ steps.extract_apks.outputs.signed_compatible }}" > "CHECKSUMS-Sesame-Compatible-${{ steps.extract_info.outputs.version }}-signed.apk.sha256"
 
       - name: Create GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v')
+       ## if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
+          files:|
+            app/build/outputs/apk/normal/release/*.apk
+            app/build/outputs/apk/compatible/release/*.apk
         with:
           tag_name: ${{ github.ref_name }}
           name: "Release ${{ github.ref_name }}"
