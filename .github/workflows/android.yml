@@ -2,13 +2,11 @@ name: Android CI with Release
 
 on:
   push:
-    branches: ["develop", "main"]  # 分支推送触发
-    tags: ["v*"]                  # 标签触发
+    branches: ["develop"]
+    tags: ["*.*"]  # 标签触发自动发布
   pull_request:
-    branches: ["develop", "main"] # PR 合并触发
-  release:
-    types: [published]           # 发布事件触发
-  workflow_dispatch:             # 手动触发
+    branches: ["develop"]
+  workflow_dispatch:
 
 # 必须添加写入权限，否则无法创建 Release
 permissions:
