@@ -1,1 +1,115 @@
+name: Android CI with Release
 
+on:
+  push:
+    branches: ["develop"]
+    tags: ["v*"]  # 仅当推送以 v 开头的标签时触发发布
+  pull_request:
+    branches: ["develop"]
+  workflow_dispatch:
+
+# 必须添加写入权限，否则无法创建 Release
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Set Timezone to Asia/Shanghai
+        run: |
+          sudo timedatectl set-timezone Asia/Shanghai
+          echo "Current time: $(date)"
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          java-version: "17"
+          distribution: "zulu"
+          cache: gradle
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Build APKs
+        run: |
+          ./gradlew assembleNormalRelease assembleCompatibleRelease -Pversion=${{ github.ref_name }}
+
+      - name: Locate APKs
+        id: locate_apks
+        run: |
+          normal_apk=$(find app/build/outputs/apk/normal/release -name "*.apk" | head -n 1)
+          compatible_apk=$(find app/build/outputs/apk/compatible/release -name "*.apk" | head -n 1)
+          echo "normal_apk=$normal_apk" >> $GITHUB_OUTPUT
+          echo "compatible_apk=$compatible_apk" >> $GITHUB_OUTPUT
+
+      - name: Sign APKs
+        id: sign_apks
+        uses: ilharp/sign-android-release@v2
+        with:
+          releaseDir: app/build/outputs/apk
+          signingKey: ${{ secrets.ANDROID_SIGNING_KEY }}
+          keyAlias: ${{ secrets.ANDROID_KEY_ALIAS }}
+          keyStorePassword: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          keyPassword: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          buildToolsVersion: 36.0.0
+
+      - name: Extract Signed APK Paths
+        id: extract_apks
+        run: |
+          IFS=':' read -r -a files <<< "${{ steps.sign_apks.outputs.signedFiles }}"
+          for file in "${files[@]}"; do
+            if [[ "$file" == *Normal* ]]; then
+              echo "signed_normal=$file" >> $GITHUB_OUTPUT
+            elif [[ "$file" == *Compatible* ]]; then
+              echo "signed_compatible=$file" >> $GITHUB_OUTPUT
+            fi
+          done
+          echo "all_files=${files[*]}" >> $GITHUB_OUTPUT
+
+      - name: Extract Version Info
+        id: extract_info
+        run: |
+          normal_file=$(basename "${{ steps.extract_apks.outputs.signed_normal }}")
+          version=$(echo "$normal_file" | sed -E 's/.*-(Normal|Compatible)-(.*)-signed\.apk/\2/')
+          echo "version=$version" >> $GITHUB_OUTPUT
+
+      - name: Generate Checksums
+        run: |
+          sha256sum "${{ steps.extract_apks.outputs.signed_normal }}" > "CHECKSUMS-Sesame-Normal-${{ steps.extract_info.outputs.version }}-signed.apk.sha256"
+          sha256sum "${{ steps.extract_apks.outputs.signed_compatible }}" > "CHECKSUMS-Sesame-Compatible-${{ steps.extract_info.outputs.version }}-signed.apk.sha256"
+
+      - name: Get Commit Details
+        id: commit_details
+        run: |
+          COMMIT_MESSAGE_BODY=$(git log -1 --format="%h: %s by %an")
+          echo "COMMIT_MESSAGE_BODY<<EOF" >> $GITHUB_OUTPUT
+          echo "$COMMIT_MESSAGE_BODY" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: "Release ${{ github.ref_name }}"
+          body: |
+            ## 📦 更新内容  
+            ${{ steps.commit_details.outputs.COMMIT_MESSAGE_BODY }}  
+
+            ## ⬇️ 下载说明  
+            - ​**Normal**: Android 8.0+  
+            - ​**Compatible**: Android 5.1-7.0  
+          files: |
+            ${{ steps.extract_apks.outputs.signed_normal }}
+            ${{ steps.extract_apks.outputs.signed_compatible }}
+            CHECKSUMS-*.sha256
+          draft: false
+          prerelease: ${{ contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') }}
+          overwrite: true
