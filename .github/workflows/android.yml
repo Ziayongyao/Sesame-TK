@@ -2,11 +2,7 @@ name: Android CI with Release
 
 on:
   push:
-    branches: ["develop"]
-  pull_request:
-    branches: ["develop"]
-  release:
-    types: [published]
+    tags: ["*.*"]
   workflow_dispatch:
 
 jobs:
@@ -57,8 +53,8 @@ jobs:
           tag_name: ${{ github.ref_name }}
           name: "Release ${{ steps.version.outputs.version }}"
           body: |
-            ## 📦 更新内容  
-            优化性能与修复已知问题  
+            ✨ **更新内容**:
+            ${{ github.event.release.body || '无更新说明' }}
             ## ⬇️ 下载说明  
             - ​**Normal**: Android 8.0+  
             - ​**Compatible**: Android 5.1-7.0
