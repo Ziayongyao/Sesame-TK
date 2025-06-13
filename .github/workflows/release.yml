@@ -3,7 +3,7 @@ name: Android CI with Release
 on:
   push:
     branches: ["develop"]
-    tags: ["v*"]  # 仅当推送以 v 开头的标签时触发发布
+    tags: ["*.*"]  # 仅当推送以 v 开头的标签时触发发布
   pull_request:
     branches: ["develop"]
   workflow_dispatch:
