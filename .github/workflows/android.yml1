@@ -52,5 +52,5 @@ jobs:
             ✨ **更新内容**:
             ${{ github.event.release.body || '无更新说明' }}
           draft: false
-          prerelease: false
+          prerelease: ${{ contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') }}
           overwrite: true  # 允许覆盖同名 Release[4](@ref)
