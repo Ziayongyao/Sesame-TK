@@ -106,8 +106,8 @@ jobs:
       - name: Send Normal APK to Telegram
         uses: appleboy/telegram-action@master
         with:
-          to: ${{ secrets.TG_CHAT_ID }}
-          token: ${{ secrets.TG_BOT_TOKEN }}
+          to: ${{ secrets.TELEGRAM_CHAT_ID }}
+          token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           message: |
             📦 *New Normal Build!*
             File: `${{ steps.file_names.outputs.normal_file }}`
@@ -121,8 +121,8 @@ jobs:
       - name: Send Compatible APK to Telegram
         uses: appleboy/telegram-action@master
         with:
-          to: ${{ secrets.TG_CHAT_ID }}
-          token: ${{ secrets.TG_BOT_TOKEN }}
+          to: ${{ secrets.TELEGRAM_CHAT_ID }}
+          token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           message: |
             📦 *New Compatible Build!*
             File: `${{ steps.file_names.outputs.compatible_file }}`
