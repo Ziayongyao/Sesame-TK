@@ -103,32 +103,35 @@ jobs:
     #      draft: false
     #      prerelease: ${{ contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') }}
 
-      - name: Send Normal APK to Telegram
-        uses: appleboy/telegram-action@master
-        with:
-          to: ${{ secrets.TELEGRAM_CHAT_ID }}
-          token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          message: |
-            📦 *New Normal Build!*
-            File: `${{ steps.file_names.outputs.normal_file }}`
-            Branch: `${{ github.ref_name }}`
-            Triggered by: `${{ github.actor }}`
-            
-            ${{ steps.commit_details.outputs.COMMIT_MESSAGE_BODY }}
-          document: ${{ steps.extract_apks.outputs.signed_normal }}
-          format: markdown
+      - name: Upload APKs to Telegram
+        env:
+          TELEGRAM_API: "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}"
+        run: |
+          sudo apt-get install -y jq  # 安装 JSON 解析工具
+          mkdir -p artifacts
+          cp ${{ steps.extract_apks.outputs.signed_normal }} artifacts/
+          cp ${{ steps.extract_apks.outputs.signed_compatible }} artifacts/
 
-      - name: Send Compatible APK to Telegram
-        uses: appleboy/telegram-action@master
-        with:
-          to: ${{ secrets.TELEGRAM_CHAT_ID }}
-          token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          message: |
-            📦 *New Compatible Build!*
-            File: `${{ steps.file_names.outputs.compatible_file }}`
-            Branch: `${{ github.ref_name }}`
-            Triggered by: `${{ github.actor }}`
+          upload_file() {
+            local file_path=$1
+            local file_name=$(basename $file_path)
+            echo "::notice::Uploading $file_name ..."
             
-            ${{ steps.commit_details.outputs.COMMIT_MESSAGE_BODY }}
-          document: ${{ steps.extract_apks.outputs.signed_compatible }}
-          format: markdown
+            response=$(curl -s -w "%{http_code}" -F "chat_id=${{ secrets.TELEGRAM_CHAT_ID }}" \
+                 -F "document=@$file_path" \
+                 "${TELEGRAM_API}/sendDocument")
+            
+            status_code=${response: -3}
+            body=${response%???}
+            
+            if [ "$status_code" != "200" ]; then
+              echo "::error::Upload failed for $file_name"
+              echo "Response: $body" >&2
+              exit 1
+            else
+              echo "::success::$file_name uploaded successfully!"
+            fi
+          }
+
+          upload_file artifacts/$(echo ${{ steps.extract_apks.outputs.signed_normal }} | xargs basename)
+          upload_file artifacts/$(echo ${{ steps.extract_apks.outputs.signed_compatible }} | xargs basename)
