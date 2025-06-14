@@ -1,0 +1,125 @@
+name: Sync
+
+on:
+  # 同步触发配置
+  schedule:
+    - cron: '0 8 * * *'  # 每天凌晨8点检查同步
+ # workflow_dispatch:
+  
+  # 原有触发条件
+  push:
+    tags: ["*"]
+  pull_request:
+    branches: [develop, main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync-upstream:
+    runs-on: ubuntu-latest
+    outputs:
+      sync_status:: ${{ steps.sync_check.outputs.sync_status }}
+      has_conflict:: ${{ steps.sync_check.outputs.has_conflict }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Sync from Upstream
+        id: sync_check
+        run: |
+          # 配置上游仓库
+          upstream_url="https://github.com/Fansirsqi/Sesame-TK.git"
+          upstream_branch="main"
+          
+          # 添加上游远程仓库
+          git remote add upstream "$upstream_url" || true
+          git fetch upstream --depth=1
+          
+          # 检测新提交
+          upstream_commits=$(git rev-list upstream/$upstream_branch..$upstream_branch --count)
+          if [ "$upstream_commits" -gt 0 ]; then
+            # 执行合并
+            git merge upstream/$upstream_branch --no-commit --no-ff
+            if [ $? -ne 0 ]; then
+              echo "CONFLICT_DETECTED=1" >> $GITHUB_ENV
+              echo "::set-output name=has_conflict::true"
+              echo "::set-output name=sync_status::conflict"
+              exit 1
+            fi
+            echo "::set-output name=sync_status::success"
+          else
+            echo "::set-output name=sync_status::no-changes"
+          fi
+
+  build-and-release:
+    needs: sync-upstream
+    if: needs.sync-upstream.outputs.sync_status != 'conflict'
+    runs-on: ubuntu-latest
+    concurrency: release-${{ github.ref }}
+    
+    steps:
+      # 基础环境配置
+      - name: Set Timezone
+        run: sudo timedatectl set-timezone Asia/Shanghai
+        
+      # 版本信息提取
+      - name: Extract Version
+        id: version_info
+        run: echo "version=$(./gradlew printVersion | grep -oP 'version=.*')" >> $GITHUB_OUTPUT
+
+      # 构建配置
+      - name: Setup JDK
+        uses: actions/setup-java@v4
+        with:
+          java-version: "24"
+          distribution: "zulu"
+          cache: gradle
+
+      # 核心构建流程
+      - name: Build & Sign APKs
+        run: |
+          ./gradlew assembleNormalRelease assembleCompatibleRelease \
+            -Pversion=${{ steps.version_info.outputs.version }}
+
+      - name: Locate Artifacts
+        id: artifact_paths
+        run: |
+          normal_apk=$(find app/build/outputs/apk/normal/release -name "*.apk" | head -n 1)
+          compatible_apk=$(find app/build/outputs/apk/compatible/release -name "*.apk" | head -n 1)
+          echo "::set-output name=normal_apk::$normal_apk"
+          echo "::set-output name=compatible_apk::$compatible_apk"
+
+      # 文件上传配置
+      - name: Upload to Telegram
+        env:
+          TELEGRAM_API: "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}"
+        run: |
+          mkdir -p release_assets
+          cp ${{ steps.artifact_paths.outputs.normal_apk }} release_assets/
+          cp ${{ steps.artifact_paths.outputs.compatible_apk }} release_assets/
+
+          upload_file() {
+            local file_path=$1
+            local file_name=$(basename $file_path)
+            echo "Uploading $file_name ..."
+            
+            response=$(curl -s -w "%{http_code}" -F "chat_id=${{ secrets.TELEGRAM_CHAT_ID }}" \
+                 -F "document=@$file_path" \
+                 -F "caption=#Release\n\n*Version*: $version\n*Branch*: $GITHUB_REF_NAME\n\n${{ steps.commit_details.outputs.COMMIT_MESSAGE_BODY }}" \
+                 -F "parse_mode=MarkdownV2" \
+                 "${TELEGRAM_API}/sendDocument")
+            
+            status_code=${response: -3}
+            if [ "$status_code" != "200" ]; then
+              echo "Upload failed for $file_name"
+              echo "Response: ${response%???}" >&2
+              exit 1
+            fi
+          }
+
+          upload_file release_assets/$(basename ${{ steps.artifact_paths.outputs.normal_apk }})
+          upload_file release_assets/$(basename ${{ steps.artifact_paths.outputs.compatible_apk }})
