@@ -102,3 +102,11 @@ jobs:
             CHECKSUMS-*.sha256
           draft: false
           prerelease: ${{ contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') }}
+
+      - name: Upload APK to Telegram
+        uses: appleboy/telegram-action@master
+        with:
+          to: ${{ secrets.TELEGRAM_CHAT_ID }}
+          token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          document: app/build/outputs/apk/release/app-release.apk
+          caption: "✅ APK 构建成功！版本: ${{ github.ref_name }}"
