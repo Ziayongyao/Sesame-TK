@@ -1,17 +1,13 @@
-name: Sync
+name: Sync & Release
 
 on:
-  # 同步触发配置
   schedule:
-    - cron: '0 8 * * *'  # 每天凌晨8点检查同步
+    - cron: '0 8 * * *'  # 每天凌晨8点同步
   workflow_dispatch:
-
-  # 原有触发条件
   push:
     tags: ["*"]
   pull_request:
     branches: [develop, main]
-#  workflow_dispatch:
 
 permissions:
   contents: write
@@ -31,23 +27,22 @@ jobs:
       - name: Sync from Upstream
         id: sync_check
         run: |
-          # 配置上游仓库
           upstream_url="https://github.com/Fansirsqi/Sesame-TK.git"
           upstream_branch="main"
           
-          # 添加上游远程仓库
-          git remote add upstream "$upstream_url" || true
+          # 添加上游远程仓库并验证
+          git remote add upstream "$upstream_url" 2>/dev/null || true
           git fetch upstream --depth=1
           
-          # 检测新提交
+          # 检测新提交并处理冲突
           upstream_commits=$(git rev-list upstream/$upstream_branch..$upstream_branch --count)
           if [ "$upstream_commits" -gt 0 ]; then
-            # 执行合并
             git merge upstream/$upstream_branch --no-commit --no-ff
             if [ $? -ne 0 ]; then
               echo "CONFLICT_DETECTED=1" >> $GITHUB_ENV
               echo "::set-output name=has_conflict::true"
               echo "::set-output name=sync_status::conflict"
+              echo "检测到冲突，请手动解决后重试"
               exit 1
             fi
             echo "::set-output name=sync_status::success"
@@ -62,41 +57,60 @@ jobs:
     concurrency: release-${{ github.ref }}
     
     steps:
-      # 基础环境配置
       - name: Set Timezone
         run: sudo timedatectl set-timezone Asia/Shanghai
-        
-      # 版本信息提取
+
       - name: Extract Version
         id: version_info
         run: echo "version=$(./gradlew printVersion | grep -oP 'version=.*')" >> $GITHUB_OUTPUT
+        env:
+          GRADLE_USER_HOME: .gradle  # 缓存Gradle依赖
 
-      # 构建配置
       - name: Setup JDK
         uses: actions/setup-java@v4
         with:
           java-version: "24"
           distribution: "zulu"
-          cache: gradle
+          cache: 'gradle'
 
-      # 核心构建流程
-      - name: Build & Sign APKs
+      - name: Cache Dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('​**​/*.gradle*') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      - name: Build with Gradle
         run: |
+          set -eo pipefail  # 严格错误处理
           ./gradlew assembleNormalRelease assembleCompatibleRelease \
             -Pversion=${{ steps.version_info.outputs.version }}
+          echo "构建成功，版本号: ${{ steps.version_info.outputs.version }}"
+
+      - name: Verify Build Artifacts
+        run: |
+          echo "验证APK文件存在性:"
+          normal_apk=$(find app/build/outputs/apk/normal/release -name "*.apk" | head -n 1)
+          compatible_apk=$(find app/build/outputs/apk/compatible/release -name "*.apk" | head -n 1)
+          
+          [ -f "$normal_apk" ] && echo "Normal APK存在: $normal_apk" || echo "Normal APK缺失"
+          [ -f "$compatible_apk" ] && echo "Compatible APK存在: $compatible_apk" || echo "Compatible APK缺失"
 
       - name: Locate Artifacts
         id: artifact_paths
         run: |
-          normal_apk=$(find app/build/outputs/apk/normal/release -name "*.apk" | head -n 1)
-          compatible_apk=$(find app/build/outputs/apk/compatible/release -name "*.apk" | head -n 1)
+          normal_apk=app/build/outputs/apk/normal/release/app-normal-release.apk
+          compatible_apk=app/build/outputs/apk/compatible/release/app-compatible-release.apk
           echo "::set-output name=normal_apk::$normal_apk"
           echo "::set-output name=compatible_apk::$compatible_apk"
 
-      # 文件上传配置
       - name: Upload to Telegram
         env:
           TELEGRAM_API: "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}"
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
           mkdir -p release_assets
           cp ${{ steps.artifact_paths.outputs.normal_apk }} release_assets/
@@ -105,21 +119,42 @@ jobs:
           upload_file() {
             local file_path=$1
             local file_name=$(basename $file_path)
-            echo "Uploading $file_name ..."
             
-            response=$(curl -s -w "%{http_code}" -F "chat_id=${{ secrets.TELEGRAM_CHAT_ID }}" \
+            if [ ! -f "$file_path" ]; then
+              echo "ERROR: 文件不存在 - $file_path"
+              exit 1
+            fi
+
+            echo "正在上传 $file_name ..."
+            response=$(curl -s -w "%{http_code}" -F "chat_id=$TELEGRAM_CHAT_ID" \
                  -F "document=@$file_path" \
-                 -F "caption=#Release\n\n*Version*: $version\n*Branch*: $GITHUB_REF_NAME\n\n${{ steps.commit_details.outputs.COMMIT_MESSAGE_BODY }}" \
+                 -F "caption=#Release\n\n*版本*: $version\n*分支*: $GITHUB_REF_NAME\n\n${{ steps.commit_details.outputs.COMMIT_MESSAGE_BODY }}" \
                  -F "parse_mode=MarkdownV2" \
                  "${TELEGRAM_API}/sendDocument")
             
             status_code=${response: -3}
             if [ "$status_code" != "200" ]; then
-              echo "Upload failed for $file_name"
-              echo "Response: ${response%???}" >&2
+              echo "上传失败 ($status_code): $file_name"
+              echo "响应内容: ${response%???}"
               exit 1
+            else
+              echo "上传成功: $file_name"
             fi
           }
 
-          upload_file release_assets/$(basename ${{ steps.artifact_paths.outputs.normal_apk }})
-          upload_file release_assets/$(basename ${{ steps.artifact_paths.outputs.compatible_apk }})
+          # 添加重试机制
+          retry_upload() {
+            local max_attempts=3
+            local attempt=1
+            local file_path=$1
+            while [ $attempt -le $max_attempts ]; do
+              upload_file "$file_path" && break || {
+                echo "尝试 $attempt/$max_attempts 失败，5秒后重试..."
+                sleep 5
+                attempt=$((attempt+1))
+              }
+            done
+          }
+
+          retry_upload release_assets/$(basename ${{ steps.artifact_paths.outputs.normal_apk }})
+          retry_upload release_assets/$(basename ${{ steps.artifact_paths.outputs.compatible_apk }})
