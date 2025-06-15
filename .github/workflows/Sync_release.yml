@@ -1,27 +1,24 @@
-name: Sync
+name: Sync & Release
 
 on:
-  # 同步触发配置
   schedule:
-    - cron: '0 8 * * *'  # 每天凌晨8点检查同步
+    - cron: '0 8 * * *'  # 每日凌晨8点执行
   workflow_dispatch:
-
-  # 原有触发条件
   push:
     tags: ["*"]
   pull_request:
     branches: [develop, main]
-#  workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
+  packages: write
 
 jobs:
   sync-upstream:
     runs-on: ubuntu-latest
     outputs:
       sync_status:: ${{ steps.sync_check.outputs.sync_status }}
-      has_conflict:: ${{ steps.sync_check.outputs.has_conflict }}
+      checkout_valid:: ${{ steps.checkout_verify.outputs.valid }}
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -30,60 +27,75 @@ jobs:
 
       - name: Sync from Upstream
         id: sync_check
+        env:
+          UPSTREAM_REPO: "https://github.com/Fansirsqi/Sesame-TK.git"
+          UPSTREAM_BRANCH: "main"
         run: |
-          # 配置上游仓库
-          upstream_url="https://github.com/Fansirsqi/Sesame-TK.git"
-          upstream_branch="main"
+          set -eo pipefail
+          echo "Checking for upstream updates..."
           
           # 添加上游远程仓库
-          git remote add upstream "$upstream_url" || true
-          git fetch upstream --depth=1
+          git remote add upstream "${UPSTREAM_REPO}" 2>/dev/null || true
+          git fetch upstream --depth=1 --no-tags
           
           # 检测新提交
-          upstream_commits=$(git rev-list upstream/$upstream_branch..$upstream_branch --count)
+          upstream_commits=$(git rev-list upstream/${UPSTREAM_BRANCH}..${UPSTREAM_BRANCH} --count)
           if [ "$upstream_commits" -gt 0 ]; then
-            # 执行合并
-            git merge upstream/$upstream_branch --no-commit --no-ff
+            echo "Found ${upstream_commits} new commits, merging..."
+            git merge upstream/${UPSTREAM_BRANCH} --no-commit --no-ff
             if [ $? -ne 0 ]; then
               echo "CONFLICT_DETECTED=1" >> $GITHUB_ENV
-              echo "::set-output name=has_conflict::true"
-              echo "::set-output name=sync_status::conflict"
+              echo "sync_status=conflict" >> $GITHUB_OUTPUT
               exit 1
             fi
-            echo "::set-output name=sync_status::success"
+            echo "sync_status=success" >> $GITHUB_OUTPUT
           else
-            echo "::set-output name=sync_status::no-changes"
+            echo "sync_status=no-changes" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Verify Checkout Integrity
+        id: checkout_verify
+        run: |
+          echo "Validating critical files..."
+          if [ ! -f "app/build.gradle" ] || [ ! -d ".github/workflows" ]; then
+            echo "checkout_valid=false" >> $GITHUB_OUTPUT
+            echo "sync_status=invalid_checkout" >> $GITHUB_OUTPUT
+            exit 1
+          else
+            echo "checkout_valid=true" >> $GITHUB_OUTPUT
           fi
 
   build-and-release:
     needs: sync-upstream
-    if: needs.sync-upstream.outputs.sync_status != 'conflict'
+    if: |
+      needs.sync-upstream.outputs.sync_status != 'conflict' &&
+      needs.sync-upstream.outputs.sync_status != 'invalid_checkout' &&
+      needs.sync-upstream.outputs.sync_status != 'no-changes'
     runs-on: ubuntu-latest
     concurrency: release-${{ github.ref }}
     
     steps:
-      # 基础环境配置
-      - name: Set Timezone
+      - name: Setup Environment
         run: sudo timedatectl set-timezone Asia/Shanghai
-        
-      # 版本信息提取
+
       - name: Extract Version
         id: version_info
         run: echo "version=$(./gradlew printVersion | grep -oP 'version=.*')" >> $GITHUB_OUTPUT
 
-      # 构建配置
-      - name: Setup JDK
+      - name: Configure JDK
         uses: actions/setup-java@v4
         with:
           java-version: "24"
           distribution: "zulu"
           cache: gradle
 
-      # 核心构建流程
-      - name: Build & Sign APKs
+      - name: Build & Sign
         run: |
           ./gradlew assembleNormalRelease assembleCompatibleRelease \
             -Pversion=${{ steps.version_info.outputs.version }}
+          ./gradlew signing --signing.keyId=${{ secrets.SIGNING_KEY_ID }} \
+            --signing.password=${{ secrets.SIGNING_PASSWORD }} \
+            --signing.secretKeyRingFile=${{ secrets.SIGNING_SECRET_KEY_RING }}
 
       - name: Locate Artifacts
         id: artifact_paths
@@ -93,8 +105,7 @@ jobs:
           echo "::set-output name=normal_apk::$normal_apk"
           echo "::set-output name=compatible_apk::$compatible_apk"
 
-      # 文件上传配置
-      - name: Upload to Telegram
+      - name: Telegram Notification
         env:
           TELEGRAM_API: "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}"
         run: |
@@ -122,4 +133,4 @@ jobs:
           }
 
           upload_file release_assets/$(basename ${{ steps.artifact_paths.outputs.normal_apk }})
-          upload_file release_assets/$(basename ${{ steps.artifact_paths.outputs.compatible_apk }})                                                          Error: No file in /home/runner/work/Sesame-TK/Sesame-TK matched to [**/*.gradle*,**/gradle-wrapper.properties,buildSrc/**/Versions.kt,buildSrc/**/Dependencies.kt,gradle/*.versions.toml,**/versions.properties], make sure you have checked out the target repository
+          upload_file release_assets/$(basename ${{ steps.artifact_paths.outputs.compatible_apk }})
