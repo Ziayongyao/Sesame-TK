@@ -19,36 +19,11 @@ jobs:
       sync_status:: ${{ steps.sync_check.outputs.sync_status }}
       has_conflict:: ${{ steps.sync_check.outputs.has_conflict }}
     steps:
-      - name: Checkout Code
+      - name: Full Repository Checkout
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
-
-      - name: Sync from Upstream
-        id: sync_check
-        run: |
-          upstream_url="https://github.com/Fansirsqi/Sesame-TK.git"
-          upstream_branch="main"
-          
-          # 添加上游远程仓库并验证
-          git remote add upstream "$upstream_url" 2>/dev/null || true
-          git fetch upstream --depth=1
-          
-          # 检测新提交并处理冲突
-          upstream_commits=$(git rev-list upstream/$upstream_branch..$upstream_branch --count)
-          if [ "$upstream_commits" -gt 0 ]; then
-            git merge upstream/$upstream_branch --no-commit --no-ff
-            if [ $? -ne 0 ]; then
-              echo "CONFLICT_DETECTED=1" >> $GITHUB_ENV
-              echo "::set-output name=has_conflict::true"
-              echo "::set-output name=sync_status::conflict"
-              echo "检测到冲突，请手动解决后重试"
-              exit 1
-            fi
-            echo "::set-output name=sync_status::success"
-          else
-            echo "::set-output name=sync_status::no-changes"
-          fi
+          fetch-depth: 0        # 拉取全部历史
+          submodules: 'recursive' # 递归检出子模块
 
   build-and-release:
     needs: sync-upstream
@@ -57,16 +32,25 @@ jobs:
     concurrency: release-${{ github.ref }}
     
     steps:
-      - name: Set Timezone
-        run: sudo timedatectl set-timezone Asia/Shanghai
+      - name: Initialize Submodules
+        run: |
+          git submodule update --init --recursive
+          git submodule foreach git checkout main  # 同步子模块分支
 
-      - name: Extract Version
-        id: version_info
-        run: echo "version=$(./gradlew printVersion | grep -oP 'version=.*')" >> $GITHUB_OUTPUT
-        env:
-          GRADLE_USER_HOME: .gradle  # 缓存Gradle依赖
+      - name: Verify Critical Files
+        run: |
+          echo "检查Gradle核心文件:"
+          [ -f "gradle/wrapper/gradle-wrapper.properties" ] || exit 1
+          [ -f "buildSrc/build.gradle.kts" ] || exit 1
+          echo "所有核心文件存在"
 
-      - name: Setup JDK
+      - name: Clean Build Artifacts
+        run: |
+          rm -rf ~/.gradle/caches
+          rm -rf ~/.gradle/wrapper
+          rm -rf app/build
+
+      - name: Setup JDK with Cache
         uses: actions/setup-java@v4
         with:
           java-version: "24"
@@ -83,9 +67,12 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-gradle-
 
+      - name: Validate Gradle Wrapper
+        run: ./gradlew --version
+
       - name: Build with Gradle
         run: |
-          set -eo pipefail  # 严格错误处理
+          set -eo pipefail
           ./gradlew assembleNormalRelease assembleCompatibleRelease \
             -Pversion=${{ steps.version_info.outputs.version }}
           echo "构建成功，版本号: ${{ steps.version_info.outputs.version }}"
