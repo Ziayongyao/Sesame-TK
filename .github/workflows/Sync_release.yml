@@ -22,8 +22,35 @@ jobs:
       - name: Full Repository Checkout
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0        # 拉取全部历史
-          submodules: 'recursive' # 递归检出子模块
+          fetch-depth: 0        # 拉取完整历史记录
+          submodules: 'recursive' # 递归检出所有子模块
+
+      - name: Sync from Upstream
+        id: sync_check
+        run: |
+          upstream_url="https://github.com/Fansirsqi/Sesame-TK.git"
+          upstream_branch="main"
+          
+          # 添加上游远程仓库
+          git remote add upstream "$upstream_url" || true
+          git fetch upstream --depth=1
+          
+          # 检测新提交
+          upstream_commits=$(git rev-list upstream/$upstream_branch..$upstream_branch --count)
+          if [ "$upstream_commits" -gt 0 ]; then
+            # 执行合并
+            git merge upstream/$upstream_branch --no-commit --no-ff
+            if [ $? -ne 0 ]; then
+              echo "CONFLICT_DETECTED=1" >> $GITHUB_ENV
+              echo "::set-output name=has_conflict::true"
+              echo "::set-output name=sync_status::conflict"
+              echo "检测到冲突，请手动解决后重试"
+              exit 1
+            fi
+            echo "::set-output name=sync_status::success"
+          else
+            echo "::set-output name=sync_status::no-changes"
+          fi
 
   build-and-release:
     needs: sync-upstream
@@ -32,68 +59,102 @@ jobs:
     concurrency: release-${{ github.ref }}
     
     steps:
+      # 基础环境配置
+      - name: Set Timezone
+        run: sudo timedatectl set-timezone Asia/Shanghai
+        
+      # 完整代码检出（包含子模块）
+      - name: Full Repository Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: 'recursive'
+
+      # 子模块初始化和更新
       - name: Initialize Submodules
         run: |
           git submodule update --init --recursive
-          git submodule foreach git checkout main  # 同步子模块分支
+          git submodule foreach --recursive 'git checkout main || true'
 
+      # 关键文件验证
       - name: Verify Critical Files
         run: |
-          echo "检查Gradle核心文件:"
-          [ -f "gradle/wrapper/gradle-wrapper.properties" ] || exit 1
-          [ -f "buildSrc/build.gradle.kts" ] || exit 1
-          echo "所有核心文件存在"
+          echo "验证Gradle核心文件:"
+          [ -f "gradle/wrapper/gradle-wrapper.properties" ] || { echo "错误: gradle-wrapper.properties缺失"; exit 1; }
+          [ -f "buildSrc/build.gradle.kts" ] || { echo "错误: buildSrc/build.gradle.kts缺失"; exit 1; }
+          [ -f "buildSrc/src/main/kotlin/Versions.kt" ] || { echo "错误: Versions.kt缺失"; exit 1; }
+          [ -f "buildSrc/src/main/kotlin/Dependencies.kt" ] || { echo "错误: Dependencies.kt缺失"; exit 1; }
+          echo "所有关键文件验证通过"
 
-      - name: Clean Build Artifacts
+      # 清理构建缓存
+      - name: Clean Build Environment
         run: |
+          echo "清理Gradle缓存..."
           rm -rf ~/.gradle/caches
           rm -rf ~/.gradle/wrapper
+          echo "清理项目构建产物..."
           rm -rf app/build
+          rm -rf build
 
-      - name: Setup JDK with Cache
+      # JDK环境配置
+      - name: Setup JDK
         uses: actions/setup-java@v4
         with:
           java-version: "24"
           distribution: "zulu"
           cache: 'gradle'
 
-      - name: Cache Dependencies
+      # Gradle依赖缓存
+      - name: Cache Gradle Dependencies
         uses: actions/cache@v3
         with:
           path: |
             ~/.gradle/caches
             ~/.gradle/wrapper
-          key: ${{ runner.os }}-gradle-${{ hashFiles('​**​/*.gradle*') }}
+          key: ${{ runner.os }}-gradle-${{ hashFiles('​**​/*.gradle*', '​**​/gradle-wrapper.properties') }}
           restore-keys: |
             ${{ runner.os }}-gradle-
 
+      # 验证Gradle Wrapper
       - name: Validate Gradle Wrapper
-        run: ./gradlew --version
+        run: |
+          echo "Gradle版本信息:"
+          ./gradlew --version
 
-      - name: Build with Gradle
+      # 版本信息提取
+      - name: Extract Version
+        id: version_info
+        run: echo "version=$(./gradlew printVersion | grep -oP 'version=.*')" >> $GITHUB_OUTPUT
+
+      # 核心构建流程
+      - name: Build & Sign APKs
         run: |
           set -eo pipefail
+          echo "开始构建APK..."
           ./gradlew assembleNormalRelease assembleCompatibleRelease \
             -Pversion=${{ steps.version_info.outputs.version }}
-          echo "构建成功，版本号: ${{ steps.version_info.outputs.version }}"
+          echo "构建成功完成"
 
-      - name: Verify Build Artifacts
-        run: |
-          echo "验证APK文件存在性:"
-          normal_apk=$(find app/build/outputs/apk/normal/release -name "*.apk" | head -n 1)
-          compatible_apk=$(find app/build/outputs/apk/compatible/release -name "*.apk" | head -n 1)
-          
-          [ -f "$normal_apk" ] && echo "Normal APK存在: $normal_apk" || echo "Normal APK缺失"
-          [ -f "$compatible_apk" ] && echo "Compatible APK存在: $compatible_apk" || echo "Compatible APK缺失"
-
+      # 构建产物定位
       - name: Locate Artifacts
         id: artifact_paths
         run: |
-          normal_apk=app/build/outputs/apk/normal/release/app-normal-release.apk
-          compatible_apk=app/build/outputs/apk/compatible/release/app-compatible-release.apk
+          echo "查找构建产物..."
+          normal_apk=$(find app/build/outputs/apk/normal/release -name "*.apk" | head -n 1)
+          compatible_apk=$(find app/build/outputs/apk/compatible/release -name "*.apk" | head -n 1)
+          
+          if [ -z "$normal_apk" ] || [ -z "$compatible_apk" ]; then
+            echo "错误: 未找到APK构建产物"
+            exit 1
+          fi
+          
           echo "::set-output name=normal_apk::$normal_apk"
           echo "::set-output name=compatible_apk::$compatible_apk"
+          echo "找到APK文件:"
+          echo "Normal APK: $normal_apk"
+          echo "Compatible APK: $compatible_apk"
 
+      # 文件上传配置
       - name: Upload to Telegram
         env:
           TELEGRAM_API: "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}"
@@ -108,12 +169,12 @@ jobs:
             local file_name=$(basename $file_path)
             
             if [ ! -f "$file_path" ]; then
-              echo "ERROR: 文件不存在 - $file_path"
+              echo "错误: 文件不存在 - $file_path"
               exit 1
             fi
 
             echo "正在上传 $file_name ..."
-            response=$(curl -s -w "%{http_code}" -F "chat_id=$TELEGRAM_CHAT_ID" \
+            response=$(curl -s -w "%{http_code}" -F "chat_id=${{ secrets.TELEGRAM_CHAT_ID }}" \
                  -F "document=@$file_path" \
                  -F "caption=#Release\n\n*版本*: $version\n*分支*: $GITHUB_REF_NAME\n\n${{ steps.commit_details.outputs.COMMIT_MESSAGE_BODY }}" \
                  -F "parse_mode=MarkdownV2" \
