@@ -4,14 +4,14 @@ on:
   # 同步触发配置
   schedule:
     - cron: '0 8 * * *'  # 每天凌晨8点检查同步
- # workflow_dispatch:
-  
+  workflow_dispatch:
+
   # 原有触发条件
   push:
     tags: ["*"]
   pull_request:
     branches: [develop, main]
-  workflow_dispatch:
+#  workflow_dispatch:
 
 permissions:
   contents: write
