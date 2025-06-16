@@ -18,7 +18,7 @@ public class TaskCommon {
 
     public static void update() {
 
-        Log.runtime("TaskCommon Update:");
+    /*    Log.runtime("TaskCommon Update:");
         long currentTimeMillis = System.currentTimeMillis();
         List<String> isEnergyTime = BaseModel.getEnergyTime().getValue();
         if (isEnergyTime.contains("-1")) {
@@ -34,7 +34,7 @@ public class TaskCommon {
             IS_MODULE_SLEEP_TIME = false;
         } else {
             IS_MODULE_SLEEP_TIME = TimeUtil.checkInTimeRange(currentTimeMillis, isModuleSleepTime);
-        }
+        }*/
 
         IS_AFTER_8AM = TimeUtil.isAfterOrCompareTimeStr(currentTimeMillis, "0800");
     }
