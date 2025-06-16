@@ -479,10 +479,10 @@ public class ApplicationHook implements IXposedHookLoadPackage {
             if (service == null) {
                 return false;
             }
-            if (TaskCommon.IS_MODULE_SLEEP_TIME) {
+         /*   if (TaskCommon.IS_MODULE_SLEEP_TIME) {
                 Log.record(TAG, "💤 模块休眠中,停止初始化");
                 return false;
-            }
+            }*/
             if (force) {
                 String userId = getUserId();
                 if (userId == null) {
