@@ -67,9 +67,9 @@ jobs:
       - name: 合并上游更新（安全模式）
         if: steps.check_diff.outputs.has_update == 'true'
         run: |
-          git config pull.rebase false  # 禁用自动变基
+          git config pull.rebase true  # 启用自动变基
           git pull upstream main
-          git push origin main
+          git push origin main --force-with-lease
 
       - name: 触发发布流程（带状态检查）
         if: steps.check_diff.outputs.has_update == 'true'
