@@ -34,12 +34,6 @@ jobs:
           distribution: "zulu"
           cache: gradle
 
-      - name: Sync with upstream (fast-forward only)
-        run: |
-          git config pull.ff only
-          git pull origin develop
-
-
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
