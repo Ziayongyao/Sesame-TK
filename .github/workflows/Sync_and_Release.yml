@@ -44,7 +44,7 @@ jobs:
 
       - name: 获取远程仓库信息
         run: |
-          git remote add upstream https://github.com/Ziayongyao/Sesame-TK.git || true
+          git remote add upstream https://github.com/Fansirsqi/Sesame-TK.git || true
           git fetch upstream
 
       - name: 检查并合并上游更新
