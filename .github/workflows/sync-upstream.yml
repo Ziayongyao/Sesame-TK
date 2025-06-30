@@ -1,0 +1,48 @@
+name: 定时同步上游
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'  # 每6小时执行一次
+  workflow_dispatch:  # 允许手动触发
+
+jobs:
+  sync-and-trigger:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码并配置稀疏检出
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            /*
+            !.github/workflows/
+          sparse-checkout-cone-mode: false
+
+      - name: 配置上游仓库并同步更改
+        id: sync
+        run: |
+          git remote add upstream https://github.com/Fansirsqi/Sesame-TK.git || true
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          git fetch upstream
+          
+          LOCAL=$(git rev-parse HEAD)
+          REMOTE=$(git rev-parse upstream/main)
+          if [ "$LOCAL" != "$REMOTE" ]; then
+            git pull --rebase upstream main -X theirs
+            git push origin HEAD:main --force-with-lease
+            echo "changes_detected=true" >> $GITHUB_ENV
+          else
+            echo "changes_detected=false" >> $GITHUB_ENV
+          fi
+      
+      - name: 触发发布工作流
+        if: success() && env.changes_detected == 'true'
+        uses: actions/github-script@v6
+        with:
+          script: |
+            github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'build_release.yml',
+              ref: 'main'
+            })
