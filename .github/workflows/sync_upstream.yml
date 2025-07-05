@@ -1,69 +1,100 @@
-name: 定时同步上游
+name: 🔄 同步上游仓库
 
 on:
   schedule:
-    - cron: '0 */6 * * *'  # 每6小时运行一次
-  workflow_dispatch:        # 支持手动触发
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+
+env:
+  UPSTREAM_REPO: Ziayongyao/Sesame-TK
 
 jobs:
-  sync-and-build:
+  sync-check:
     runs-on: ubuntu-latest
-
+    name: 🔍 同步检查
+    
+    outputs:
+      new_commit: ${{ steps.check_new.outputs.new_commit }}
+    
     steps:
-      # 步骤1：检出当前仓库
-      - name: Checkout current repo
-        uses: actions/checkout@v4
+      - name: 📦 检出本地仓库
+        uses: actions/checkout@v3
         with:
-          fetch-depth: 0  # 获取完整历史记录
+          fetch-depth: 0
 
-      # 步骤2：添加上游仓库远程
-      - name: Add upstream remote
+      - name: 🛠️ 设置 Git 权限
         run: |
-          git remote add upstream https://github.com/Fansirsqi/Sesame-TK.git
-          git fetch upstream
+          git config --global user.name "Sesame-TK Bot"
+          git config --global user.email "bot@sesame-tk.com"
 
-      # 新增：配置 sparse-checkout 排除 .github/workflows
-      - name: Configure sparse checkout
+      - name: 📥 获取本地提交记录
         run: |
-          git config core.sparseCheckout true
-          echo "!.github/workflows" >> .git/info/sparse-checkout
-          git read-tree -mu HEAD
+          git log --pretty=format:"%H" > local_hashes.txt
+          echo "本地提交记录已保存"
 
-      # 步骤3：检查是否有新提交（优化比较逻辑）
-      - name: Check for new commits
-        id: check-commits
+      - name: 🌐 获取上游最新提交
+        id: get_upstream
         run: |
-          # 获取上游最新提交
-          git fetch upstream
-          # 检查上游提交是否为本地历史的祖先
-          if git merge-base --is-ancestor upstream/main HEAD; then
-            echo "has_new_commits=false" >> $GITHUB_OUTPUT
+          response=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            "https://api.github.com/repos/${{ env.UPSTREAM_REPO }}/commits")
+          latest_hash=$(echo $response | jq -r '.[0].sha')
+          echo "latest_hash=$latest_hash" >> $GITHUB_ENV
+          echo "获取上游最新提交: $latest_hash"
+
+      - name: 🔍 检查新提交
+        id: check_new
+        run: |
+          if grep -q "$latest_hash" local_hashes.txt; then
+            echo "无需同步，已在本地存在"
+            echo "new_commit=false" >> $GITHUB_OUTPUT
           else
-            echo "has_new_commits=true" >> $GITHUB_OUTPUT
+            echo "发现新提交，继续执行"
+            echo "new_commit=true" >> $GITHUB_OUTPUT
           fi
 
-      # 新增：配置本地仓库用户信息
-      - name: Configure local user email
-        if: steps.check-commits.outputs.has_new_commits == 'true'
-        run: |
-          git config --local user.email "sync-bot@example.com"
-          git config --local user.name "Sync Bot"
+  merge-workflow:
+    runs-on: ubuntu-latest
+    name: 🔄 分支合并
+    needs: sync-check
+    if: ${{ needs.sync-check.outputs.new_commit == 'true' }}
+    permissions:
+      contents: write
+      actions: write
+    
+    steps:
+      - name: 📦 检出主分支
+        uses: actions/checkout@v3
+        with:
+          ref: main
+          path: main-branch
 
-      # 修改：使用变基(rebase)替代重置(reset)
-      - name: Rebase onto upstream
-        if: steps.check-commits.outputs.has_new_commits == 'true'
-        run: |
-          git rebase upstream/main
+      - name: 🧩 检出上游分支
+        uses: actions/checkout@v3
+        with:
+          repository: ${{ env.UPSTREAM_REPO }}
+          ref: main
+          path: upstream-branch
+          fetch-depth: 0
 
-      # 步骤5：推送更改
-      - name: Force push changes
-        if: steps.check-commits.outputs.has_new_commits == 'true'
+      - name: 🔀 合并上游改动
         run: |
-          git push origin main --force
+          MAIN_PATH=$GITHUB_WORKSPACE/main-branch
+          UPSTREAM_PATH=$GITHUB_WORKSPACE/upstream-branch
+          cd $MAIN_PATH
+          git config --local user.name "Sesame-TK Bot"
+          git config --local user.email "bot@sesame-tk.com"
+          git remote add upstream file://$UPSTREAM_PATH
+          git fetch upstream +refs/heads/*:refs/remotes/upstream/*
+          git checkout -b upstream-main upstream/main
+          git checkout main
+          git merge --no-commit --allow-unrelated-histories \
+            -s recursive -X ours upstream-main
+          git checkout main -- .github/workflows/*
+          git commit -m "Merge upstream changes, keep local workflows"
+          git push origin main
 
-      # 步骤6：触发build_release工作流
-      - name: Trigger build workflow
-        if: steps.check-commits.outputs.has_new_commits == 'true'
+      - name: 🚀 触发构建流程
+        if: success()
         uses: actions/github-script@v6
         with:
           script: |
