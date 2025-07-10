@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 env:
-  UPSTREAM_REPO: Ziayongyao/Sesame-TK
+  UPSTREAM_REPO: Fansirsqi/Sesame-TK
 
 jobs:
   sync-check:
