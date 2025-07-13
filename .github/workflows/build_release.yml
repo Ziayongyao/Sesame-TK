@@ -97,11 +97,11 @@ jobs:
           $(grep -oP 'val minor = \K\d+' app/build.gradle.kts).\
           $(grep -oP 'val patch = \K\d+' app/build.gradle.kts)-\
           $(grep -oP 'val buildTag = "\K[^"]+' app/build.gradle.kts)
-           BUILD_TIMESTAMP=$(date +"%m.%d.%H.%M.%S")
+           BUILD_TIME=$(date +"%m.%d.%H.%M.%S")
  
-          echo "TAG_NAME=v${VERSION_NAME}_${BUILD_TIMESTAMP}" >> $GITHUB_ENV
+          echo "TAG_NAME=v${VERSION_NAME}_${BUILD_TIME}" >> $GITHUB_ENV
           echo "version=$VERSION_NAME" >> $GITHUB_OUTPUT
-          echo "timestamp=$BUILD_TIMESTAMP" >> $GITHUB_OUTPUT
+          echo "timestamp=$BUILD_TIME" >> $GITHUB_OUTPUT
 
       - name: 生成发布信息
         id: generate_release_info
