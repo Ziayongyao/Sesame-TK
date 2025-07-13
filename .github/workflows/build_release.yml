@@ -131,17 +131,18 @@ jobs:
 
           # 使用单一heredoc分隔符避免冲突
           # 修复heredoc语法
-          cat <<'EOF' >> $GITHUB_ENV
-          RELEASE_NOTES<<EOI
+          cat <<'GITHUB_ENV_EOF' >> $GITHUB_ENV
+          RELEASE_NOTES=$(cat <<'RELEASE_NOTES_EOF'
             ## 自动构建版本
             ### 提交详情: ${COMMIT_HASH}
             主题: ${COMMIT_SUBJECT}
-            描述: ${COMMIT_BODY:+}${COMMIT_BODY:-无详细描述}
+            描述: ${COMMIT_BODY:-无详细描述}
             构建时间: ${BUILD_TIME}
             构建者: ${BUILDER}
             包含版本: Normal(Android 8.0+),Compatible(Android 5.1-7.0)
-          EOI
-          EOF
+          RELEASE_NOTES_EOF
+          )
+          GITHUB_ENV_EOF
       - name: 创建GitHub Release
         uses: softprops/action-gh-release@v1
         with:
