@@ -110,12 +110,14 @@ jobs:
           RAW_COMMIT_MSG=$(git log -1 --pretty=format:"%B")
           COMMIT_SUBJECT_TEMP=$(echo "$RAW_COMMIT_MSG" | sed -n '1p' | sed 's/"/\\"/g')
           HAS_EXTENSION=$(echo "$COMMIT_SUBJECT_TEMP" | grep -E '\..+')
-          HAS_CHINESE=$(echo "$COMMIT_SUBJECT_TEMP" | grep -qP '\p{Han}' && echo "yes" || echo "no")
+          HAS_CHINESE=$(echo "$COMMIT_SUBJECT_TEMP" | grep -q '[\u4e00-\u9fff]' && echo "yes" || echo "no")
+
           if [ -n "$HAS_EXTENSION" ] && [ "$HAS_CHINESE" = "no" ]; then
               COMMIT_SUBJECT="无详细主题"
           else
               COMMIT_SUBJECT="$COMMIT_SUBJECT_TEMP"
           fi
+
           COMMIT_BODY=$(echo "$RAW_COMMIT_MSG" | sed -n '2,$p' | sed 's/"/\\"/g' | sed '/^$/d')
           BUILDER=${{ github.event_name == 'workflow_dispatch' && github.actor || '自动构建' }}
 
@@ -124,20 +126,21 @@ jobs:
           echo "COMMIT_MESSAGE_BODY=${COMMIT_BODY}" >> $GITHUB_ENV
           echo "BUILDER=${BUILDER}" >> $GITHUB_ENV
 
-          # 生成发布信息
+          # 生成发布信息（修复了heredoc嵌套问题）
           BUILD_TIME=$(date +'%Y-%m-%d %H:%M:%S')
+
+          # 使用单一heredoc分隔符避免冲突
           cat <<EOR >> $GITHUB_ENV
           RELEASE_NOTES<<EOF
-          ## 自动构建版本
-          ### 提交详情: ${COMMIT_HASH}
-           主题: ${COMMIT_SUBJECT}
-           描述: ${COMMIT_BODY:+}${COMMIT_BODY:-无详细描述}
-           构建时间: ${BUILD_TIME}
-           构建者: ${BUILDER}
-           包含版本: Normal(Android 8.0+),Compatible(Android 5.1-7.0)
-          EOF
+            ## 自动构建版本
+            ### 提交详情: ${COMMIT_HASH}
+            主题: ${COMMIT_SUBJECT}
+            描述: ${COMMIT_BODY:+}${COMMIT_BODY:-无详细描述}
+            构建时间: ${BUILD_TIME}
+            构建者: ${BUILDER}
+            包含版本: Normal(Android 8.0+),Compatible(Android 5.1-7.0)
+           EOF
           EOR
-
       - name: 创建GitHub Release
         uses: softprops/action-gh-release@v1
         with:
