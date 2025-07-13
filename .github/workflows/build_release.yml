@@ -130,8 +130,9 @@ jobs:
           BUILD_TIME=$(date +'%Y-%m-%d %H:%M:%S')
 
           # 使用单一heredoc分隔符避免冲突
-          cat <<EOR >> $GITHUB_ENV
-          RELEASE_NOTES<<EOF
+          # 修复heredoc语法
+          cat <<'EOF' >> $GITHUB_ENV
+          RELEASE_NOTES<<EOI
             ## 自动构建版本
             ### 提交详情: ${COMMIT_HASH}
             主题: ${COMMIT_SUBJECT}
@@ -139,8 +140,8 @@ jobs:
             构建时间: ${BUILD_TIME}
             构建者: ${BUILDER}
             包含版本: Normal(Android 8.0+),Compatible(Android 5.1-7.0)
-           EOF
-          EOR
+          EOI
+          EOF
       - name: 创建GitHub Release
         uses: softprops/action-gh-release@v1
         with:
