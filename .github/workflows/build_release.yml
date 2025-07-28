@@ -110,7 +110,7 @@ jobs:
           RAW_COMMIT_MSG=$(git log -1 --pretty=format:"%B")
           COMMIT_SUBJECT_TEMP=$(echo "$RAW_COMMIT_MSG" | sed -n '1p' | sed 's/"/\\"/g')
           HAS_EXTENSION=$(echo "$COMMIT_SUBJECT_TEMP" | grep -E '\..+')
-          HAS_CHINESE=$(echo "$COMMIT_SUBJECT_TEMP" | grep -q '[\u4e00-\u9fff]' && echo "yes" || echo "no")
+          HAS_CHINESE=$(echo "$COMMIT_SUBJECT_TEMP" | grep -qP '[\x{4e00}-\x{9fff}]' && echo "yes" || echo "no")
 
           if [ -n "$HAS_EXTENSION" ] && [ "$HAS_CHINESE" = "no" ]; then
               COMMIT_SUBJECT="无详细主题"
