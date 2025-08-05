@@ -71,7 +71,7 @@ jobs:
           keyAlias: ${{ secrets.ANDROID_KEY_ALIAS }}
           keyStorePassword: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           keyPassword: ${{ secrets.ANDROID_KEY_PASSWORD }}
-          buildToolsVersion: 36.0.0
+          buildToolsVersion: 35.0.0
 
       - name: 提取签名 APK 路径
         id: extract_apks
@@ -186,3 +186,4 @@ jobs:
               * Compatible 为兼容版本,适用于`Android 7.0`及以下的系统,最低支持`Android 5.1`
 
             > ~~墙内不再更新~~ 倒卖必死全家
+
