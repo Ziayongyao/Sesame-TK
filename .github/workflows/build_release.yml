@@ -51,16 +51,28 @@ jobs:
           --no-daemon \
           --stacktrace \
           --debug \
-          --warning-mode all
-        env:
+          --warning-mode all > build.log 2>&1
+        env: 
           JAVA_HOME: ${{ steps.setup-java.outputs.path }}
 
       - name: 捕获构建日志
         if: failure()
         run: |
           echo "=== 构建日志开始 ==="
-          cat $(find . -name "*.log" | head -n 5)
+          if [ -f "build.log" ]; then
+            cat build.log | head -n 200
+          else
+            echo "未找到构建日志文件"
+            echo "尝试查找其他可能的日志位置..."
+            find . -name "*.log" | head -n 10
+          fi
           echo "=== 构建日志结束 ==="
+
+      - name: 检查Java版本兼容性
+        run: |
+          echo "当前Java版本: $(java -version 2>&1)"
+          echo "检查项目Java版本要求..."
+          grep -A 5 "sourceCompatibility" app/build.gradle.kts || echo "未找到明确的Java版本要求"
 
       - name: 找到apk并设置输出
         id: locate_apks
