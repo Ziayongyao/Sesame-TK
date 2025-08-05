@@ -44,14 +44,26 @@ jobs:
 
       - name: 构建APK
         run: |
+          # 定义构建通用参数
+          BUILD_ARGS="--parallel --configure-on-demand --build-cache --stacktrace --info --warning-mode all"
+          
+          # 打印构建信息
+          echo "开始构建APK..."
+          echo "版本号: ${{ github.ref_name }}"
+          
+          # 执行构建命令
           ./gradlew assembleNormalRelease assembleCompatibleRelease \
           -Pversion=${{ github.ref_name }} \
-          --parallel \
-          --configure-on-demand \
-          --build-cache \
-          --stacktrace \
-          --info \
-          --warning-mode all
+          $BUILD_ARGS
+          
+          # 检查构建是否成功
+          if [ $? -ne 0 ]; then
+            echo "构建失败，退出码: $?"
+            exit 1
+          fi
+          
+          echo "APK构建完成!"
+        shell: bash
 
       - name: 找到apk并设置输出
         id: locate_apks
@@ -168,3 +180,4 @@ jobs:
           curl -F "chat_id=${{ secrets.TELEGRAM_CHAT_ID }}" \
               -F "document=@\"${{ steps.extract_apks.outputs.signed_compatible }}\"" \
               "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendDocument"
+
