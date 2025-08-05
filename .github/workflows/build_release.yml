@@ -25,11 +25,11 @@ jobs:
         uses: actions/setup-java@v4
         with:
           java-version: '23'
-          distribution: 'temurin'
+          distribution: 'zulu'
           cache: gradle
 
       - name: 缓存Gradle依赖
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: |
             ~/.gradle/caches
@@ -42,14 +42,8 @@ jobs:
       - name: 授予Gradle执行权限
         run: chmod +x ./gradlew
 
-      - name: 构建APK
-        run: |
-          ./gradlew assembleNormalRelease assembleCompatibleRelease \
-          -Pversion=${{ github.ref_name }} \
-          --parallel \
-          --configure-on-demand \
-          --build-cache \
-          --no-daemon
+      - name: Build with Gradle
+        run: ./gradlew assembleNormalRelease assembleCompatibleRelease -Pversion=${{ github.ref_name }}
 
       - name: 找到apk并设置输出
         id: locate_apks
@@ -166,3 +160,4 @@ jobs:
           curl -F "chat_id=${{ secrets.TELEGRAM_CHAT_ID }}" \
               -F "document=@\"${{ steps.extract_apks.outputs.signed_compatible }}\"" \
               "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendDocument"
+
