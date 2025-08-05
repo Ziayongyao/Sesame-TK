@@ -44,25 +44,27 @@ jobs:
 
       - name: 构建APK
         run: |
-          # 定义构建通用参数
-          BUILD_ARGS="--parallel --configure-on-demand --build-cache --stacktrace --info --warning-mode all"
+          # 定义构建通用参数（优化日志输出）
+          # 移除--info和--stacktrace，仅保留必要的构建参数
+          BUILD_ARGS="--parallel --configure-on-demand --build-cache --warning-mode all"
           
-          # 打印构建信息
+          # 打印基本构建信息
           echo "开始构建APK..."
           echo "版本号: ${{ github.ref_name }}"
           
-          # 执行构建命令
+          # 执行构建命令（减少日志输出）
           ./gradlew assembleNormalRelease assembleCompatibleRelease \
           -Pversion=${{ github.ref_name }} \
-          $BUILD_ARGS
+          $BUILD_ARGS > build_log.txt 2>&1
           
           # 检查构建是否成功
           if [ $? -ne 0 ]; then
-            echo "构建失败，退出码: $?"
+            echo "构建失败，请查看build_log.txt获取详细信息"
+            cat build_log.txt | tail -n 50  # 显示最后50行错误日志
             exit 1
           fi
           
-          echo "APK构建完成!"
+          echo "APK构建完成! 完整日志已保存到build_log.txt"
         shell: bash
 
       - name: 找到apk并设置输出
@@ -180,4 +182,5 @@ jobs:
           curl -F "chat_id=${{ secrets.TELEGRAM_CHAT_ID }}" \
               -F "document=@\"${{ steps.extract_apks.outputs.signed_compatible }}\"" \
               "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendDocument"
+
 
