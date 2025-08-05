@@ -46,13 +46,21 @@ jobs:
         run: |
           ./gradlew assembleNormalRelease assembleCompatibleRelease \
           -Pversion=${{ github.ref_name }} \
-          --parallel \
           --configure-on-demand \
           --build-cache \
           --no-daemon \
           --stacktrace \
-          --info \
+          --debug \
           --warning-mode all
+        env:
+          JAVA_HOME: ${{ steps.setup-java.outputs.path }}
+
+      - name: 捕获构建日志
+        if: failure()
+        run: |
+          echo "=== 构建日志开始 ==="
+          cat $(find . -name "*.log" | head -n 5)
+          echo "=== 构建日志结束 ==="
 
       - name: 找到apk并设置输出
         id: locate_apks
