@@ -46,8 +46,8 @@ jobs:
         run: |
           ./gradlew assembleNormalRelease assembleCompatibleRelease \
           -Pversion=${{ github.ref_name }} \
-          --parallel \
-          --configure-on-demand \
+          --no-parallel \
+          --no-configure-on-demand \
           --build-cache \
           --no-daemon \
           --stacktrace \
