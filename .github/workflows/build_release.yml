@@ -1,13 +1,6 @@
-name: 📦构建普通版本
-run-name: 📦 ${{ github.actor }} @ 构建普通版本
+name: 构建发布
 
 on:
-  push:
-    branches: ["develop"]
-  pull_request:
-    branches: ["develop"]
-  release:
-    types: [published]
   workflow_dispatch:
   workflow_run:
     workflows: ["sync-upstream"]
@@ -15,40 +8,50 @@ on:
       - completed
 
 jobs:
-  build:
+  build-multiple-apks:
     runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
 
     steps:
-      - name: 将时区设为亚洲/上海
-        run: |
-          sudo timedatectl set-timezone Asia/Shanghai
-          echo "Current time: $(date)"
+      - name: 设置时区
+        run: sudo timedatectl set-timezone Asia/Shanghai
 
-      - name: Checkout
+      - name: 检出代码
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: 设置 JDK
+      - name: 设置JDK
         uses: actions/setup-java@v4
         with:
-          java-version: "17"
-          distribution: "zulu"
+          java-version: '23'
+          distribution: 'temurin'
           cache: gradle
 
-      - name: 设置 Gradle
-        uses: gradle/actions/setup-gradle@v4
+      - name: 缓存Gradle依赖
+        uses: actions/cache@v3
         with:
-          cache-read-only: false
-          gradle-version: 8.4 # 显式指定兼容版本
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+            ~/.gradle/build-cache-1  # 添加构建缓存路径
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
 
-      - name: 使用 Gradle 构建
+      - name: 授予Gradle执行权限
+        run: chmod +x ./gradlew
+
+      - name: 构建APK
         run: |
-          # 增加诊断参数并拆分构建命令
-          ./gradlew assembleNormalRelease --info -Pversion=${{ github.ref_name }} || exit 1
-          ./gradlew assembleCompatibleRelease --info -Pversion=${{ github.ref_name }} || exit 1
+          ./gradlew assembleNormalRelease assembleCompatibleRelease \
+          -Pversion=${{ github.ref_name }} \
+          --parallel \
+          --configure-on-demand \
+          --build-cache \
+          --no-daemon
 
-      - name: 查找 APK 并设置输出
+      - name: 找到apk并设置输出
         id: locate_apks
         run: |
           normal_apk=$(find app/build/outputs/apk/normal/release -name "*.apk" | head -n 1)
@@ -56,13 +59,13 @@ jobs:
           echo "normal_apk=$normal_apk" >> $GITHUB_OUTPUT
           echo "compatible_apk=$compatible_apk" >> $GITHUB_OUTPUT
 
-      - name: 将 APK 复制到暂存阶段以便签名
+      - name: 将apk复制到暂存区进行签名
         run: |
           mkdir -p app/build/outputs/apk/all
           cp "${{ steps.locate_apks.outputs.normal_apk }}" app/build/outputs/apk/all/
           cp "${{ steps.locate_apks.outputs.compatible_apk }}" app/build/outputs/apk/all/
 
-      - name: APK签名
+      - name: 签名apk
         id: sign_apks
         uses: ilharp/sign-android-release@v2
         with:
@@ -71,119 +74,95 @@ jobs:
           keyAlias: ${{ secrets.ANDROID_KEY_ALIAS }}
           keyStorePassword: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           keyPassword: ${{ secrets.ANDROID_KEY_PASSWORD }}
-          buildToolsVersion: 35.0.0
+          buildToolsVersion: 36.0.0
 
-      - name: 提取签名 APK 路径
+      - name: 提取已签名的apk路径
         id: extract_apks
         run: |
           IFS=':' read -r -a files <<< "${{ steps.sign_apks.outputs.signedFiles }}"
           for file in "${files[@]}"; do
             if [[ "$file" == *Normal* ]]; then
               echo "signed_normal=$file" >> $GITHUB_OUTPUT
+              echo "NORMAL_APK_PATH=$file" >> $GITHUB_ENV  # 新增环境变量赋值
             elif [[ "$file" == *Compatible* ]]; then
               echo "signed_compatible=$file" >> $GITHUB_OUTPUT
+              echo "COMPATIBLE_APK_PATH=$file" >> $GITHUB_ENV  # 新增环境变量赋值
             fi
           done
 
-      - name: 生成日期时间版本号（带 v 前缀）
-        id: generate_version
+      - name: 提取构建信息
+        id: build_info
         run: |
-          version=v$(date "+%Y-%m-%d_%H-%M-%S")
-          echo "version=$version" >> $GITHUB_OUTPUT
+          VERSION_NAME=$(grep -oP 'val major = \K\d+' app/build.gradle.kts).\
+          $(grep -oP 'val minor = \K\d+' app/build.gradle.kts).\
+          $(grep -oP 'val patch = \K\d+' app/build.gradle.kts)-\
+          $(grep -oP 'val buildTag = "\K[^"]+' app/build.gradle.kts)
+           BUILD_TIME=$(date +"%m.%d.%H.%M.%S")
+ 
+          echo "TAG_NAME=v${VERSION_NAME}_${BUILD_TIME}" >> $GITHUB_ENV
+          echo "version=$VERSION_NAME" >> $GITHUB_OUTPUT
+          echo "timestamp=$BUILD_TIME" >> $GITHUB_OUTPUT
 
-      - name: 生成sha256校验值
+      - name: 生成发布信息
+        id: generate_release_info
         run: |
-          sha256sum ${{ steps.extract_apks.outputs.signed_normal }} > CHECKSUMS-Sesame-Normal-${{ steps.generate_version.outputs.version }}.${{ env.SHORT_SHA }}-signed.apk.sha256
-          sha256sum ${{ steps.extract_apks.outputs.signed_compatible }} > CHECKSUMS-Sesame-Compatible-${{ steps.generate_version.outputs.version }}.${{ env.SHORT_SHA }}-signed.apk.sha256
+          COMMIT_HASH=$(git rev-parse --short HEAD || echo "unknown")
+          RAW_COMMIT_MSG=$(git log -1 --pretty=format:"%B")
+          COMMIT_SUBJECT_TEMP=$(echo "$RAW_COMMIT_MSG" | sed -n '1p' | sed 's/"/\\"/g')
+          HAS_EXTENSION=$(echo "$COMMIT_SUBJECT_TEMP" | grep -E '\..+')
+          HAS_CHINESE=$(echo "$COMMIT_SUBJECT_TEMP" | grep -qP '[\x{4e00}-\x{9fff}]' && echo "yes" || echo "no")
 
-      - name: 获取提交详细信息
-        id: commit_details
-        run: |
-          COMMIT_MESSAGE_BODY=$( \
-            if [[ "${{ github.event_name }}" == "push" ]]; then \
-              echo "🔨 $(git rev-list --count ${{ github.event.before }}..${{ github.event.after }}) new commits to ${{ github.repository }}:${{ github.ref_name }} ([compare view](https://github.com/${{ github.repository }}/compare/${{ github.event.before }}...${{ github.event.after }}))"; \
-              echo ""; \
-              git log --format="  %h ([view commit](https://github.com/${{ github.repository }}/commit/%H)): %s by %an" ${{ github.event.before }}..${{ github.event.after }}; \
-            elif [[ "${{ github.event_name }}" == "pull_request" ]]; then \
-              echo "📦 Pull Request #${{ github.event.number }} for ${{ github.repository }}: ${{ github.head_ref }} -> ${{ github.base_ref }} ([view PR](https://github.com/${{ github.repository }}/pull/${{ github.event.number }}))"; \
-              echo ""; \
-              echo "Commits:"; \
-              git log --format="  %h ([view commit](https://github.com/${{ github.repository }}/commit/%H)): %s by %an" ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}; \
-            elif [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then \
-              echo "⚙️ Manual workflow run on ${{ github.ref_name }} by ${{ github.actor }}"; \
-              echo ""; \
-              echo "Latest commit:"; \
-              git log -1 --format="  %h ([view commit](https://github.com/${{ github.repository }}/commit/%H)): %s by %an"; \
-            else \
-              echo "ℹ️ Commit information for ${{ github.event_name }} event on ${{ github.ref_name }} by ${{ github.actor }}:"; \
-              echo ""; \
-              git log -1 --format="  %h ([view commit](https://github.com/${{ github.repository }}/commit/%H)): %s by %an"; \
-            fi \
-          )
-          echo "COMMIT_MESSAGE_BODY<<EOF" >> $GITHUB_OUTPUT
-          echo "$COMMIT_MESSAGE_BODY" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          if [ -n "$HAS_EXTENSION" ] && [ "$HAS_CHINESE" = "no" ]; then
+              COMMIT_SUBJECT="无详细主题"
+          else
+              COMMIT_SUBJECT="$COMMIT_SUBJECT_TEMP"
+          fi
 
-      - name: 向TG发送组合消息
-        uses: appleboy/telegram-action@master
+          COMMIT_BODY=$(echo "$RAW_COMMIT_MSG" | sed -n '2,$p' | sed 's/"/\\"/g' | sed '/^$/d')
+          BUILDER=${{ github.event_name == 'workflow_dispatch' && github.actor || '自动构建' }}
+
+          echo "COMMIT_HASH=${COMMIT_HASH}" >> $GITHUB_ENV
+          echo "COMMIT_MESSAGE_SUBJECT=${COMMIT_SUBJECT}" >> $GITHUB_ENV
+          echo "COMMIT_MESSAGE_BODY=${COMMIT_BODY}" >> $GITHUB_ENV
+          echo "BUILDER=${BUILDER}" >> $GITHUB_ENV
+
+          # 修复环境变量格式错误
+          echo "RELEASE_NOTES<<EOF" >> $GITHUB_ENV
+          echo "## 自动构建版本" >> $GITHUB_ENV
+          echo "### 提交详情: ${COMMIT_HASH}" >> $GITHUB_ENV
+          echo "主题: ${COMMIT_SUBJECT}" >> $GITHUB_ENV
+          echo "描述: ${COMMIT_BODY:-无详细描述}" >> $GITHUB_ENV
+          echo "构建时间: ${BUILD_TIME}" >> $GITHUB_ENV
+          echo "构建者: ${BUILDER}" >> $GITHUB_ENV
+          echo "包含版本: Normal(Android 8.0+),Compatible(Android 5.1-7.0)" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
+      - name: 创建GitHub Release
+        uses: softprops/action-gh-release@v1
         with:
-          to: ${{ secrets.TG_CHAT_ID }}
-          token: ${{ secrets.TG_BOT_TOKEN }}
-          message: |
-            📦 *普通新版本 ${{ steps.generate_version.outputs.version }} Build!*
-
-            - 分支: `${{ github.ref_name }}`
-            - 触发者: `${{ github.actor }}`
-
-            *下载说明:*
-              * Normal 为正常版本,适用于`Android 8.0`及以上的系统*
-              * Compatible 为兼容版本,适用于`Android 7.0`及以下的系统,最低支持`Android 5.1`*
-
-            ${{ steps.commit_details.outputs.COMMIT_MESSAGE_BODY }}
-          format: markdown
-
-      - name: 向TG发送正常版本APK
-        uses: appleboy/telegram-action@master
-        with:
-          to: ${{ secrets.TG_CHAT_ID }}
-          token: ${{ secrets.TG_BOT_TOKEN }}
-          document: ${{ steps.extract_apks.outputs.signed_normal }}
-
-      - name: 向TG发送兼容版本APK
-        uses: appleboy/telegram-action@master
-        with:
-          to: ${{ secrets.TG_CHAT_ID }}
-          token: ${{ secrets.TG_BOT_TOKEN }}
-          document: ${{ steps.extract_apks.outputs.signed_compatible }}
-
-      - name: 利用版本号创建标签
-        if: startsWith(github.ref, 'refs/heads/main') && github.event_name == 'push'
-        run: |
-          VERSION_TAG="${{ steps.generate_version.outputs.version }}"
-          echo "Creating tag: $VERSION_TAG"
-          git tag "$VERSION_TAG"
-          git push origin "$VERSION_TAG"
-
-      - name: 将资源整合上传到你的仓库发布
-        uses: softprops/action-gh-release@v2
-        with:
-          name: ${{ github.event.release.tag_name || steps.generate_version.outputs.version }}
+          name: "v${{ steps.build_info.outputs.version }}-${{ steps.build_info.outputs.timestamp }}"
+          body: ${{ env.RELEASE_NOTES }}
+          tag_name: ${{ env.TAG_NAME }}
           files: |
-            ${{ steps.extract_apks.outputs.signed_compatible }}
-            ${{ steps.extract_apks.outputs.signed_normal }}
-            CHECKSUMS-Sesame-Normal-${{ steps.generate_version.outputs.version }}.${{ env.SHORT_SHA }}-signed.apk.sha256
-            CHECKSUMS-Sesame-Compatible-${{ steps.generate_version.outputs.version }}.${{ env.SHORT_SHA }}-signed.apk.sha256
-          tag_name: ${{ steps.generate_version.outputs.version }}
-          draft: false
-          append_body: true
-          generate_release_notes: true
-          body: |
-            ## ✨普通版更新了啥？
+            ${{ env.NORMAL_APK_PATH }}
+            ${{ env.COMPATIBLE_APK_PATH }}
+          token: ${{ secrets.GITHUB_TOKEN }}
 
-            ${{ steps.commit_details.outputs.COMMIT_MESSAGE_BODY }}
-            > ## 下载说明
-              * Normal 为正常版本,适用于`Android 8.0`及以上的系统
-              * Compatible 为兼容版本,适用于`Android 7.0`及以下的系统,最低支持`Android 5.1`
+      - name: 📢 发送Telegram发布通知
+        uses: appleboy/telegram-action@master
+        with:
+          to: ${{ secrets.TELEGRAM_CHAT_ID }}
+          token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          message: |
+            🚀 新版本发布！
+             标签: ${{ env.TAG_NAME }}
+             发布说明:
+              ${{ env.RELEASE_NOTES }}
 
-            > ~~墙内不再更新~~ 倒卖必死全家
-
+      - name: 📦 上传APK via curl
+        run: |
+          curl -F "chat_id=${{ secrets.TELEGRAM_CHAT_ID }}" \
+              -F "document=@\"${{ steps.extract_apks.outputs.signed_normal }}\"" \
+              "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendDocument"
+          curl -F "chat_id=${{ secrets.TELEGRAM_CHAT_ID }}" \
+              -F "document=@\"${{ steps.extract_apks.outputs.signed_compatible }}\"" \
+              "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendDocument"
