@@ -49,7 +49,10 @@ jobs:
           --parallel \
           --configure-on-demand \
           --build-cache \
-          --no-daemon
+          --no-daemon \
+          --stacktrace \
+          --info \
+          --warning-mode all
 
       - name: 找到apk并设置输出
         id: locate_apks
