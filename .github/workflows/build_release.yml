@@ -1,13 +1,6 @@
 name: 构建发布
 
-
 on:
-  push:
-    branches: ["main"]
-  pull_request:
-    branches: ["main"]
-  release:
-    types: [published]
   workflow_dispatch:
   workflow_run:
     workflows: ["sync-upstream"]
@@ -15,38 +8,48 @@ on:
       - completed
 
 jobs:
-  build:
+  build-multiple-apks:
     runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
 
     steps:
-      - name: Set Timezone to Asia/Shanghai
-        run: |
-          sudo timedatectl set-timezone Asia/Shanghai
-          echo "Current time: $(date)"
+      - name: 设置时区
+        run: sudo timedatectl set-timezone Asia/Shanghai
 
-      - name: Checkout
+      - name: 检出代码
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Set up JDK
+      - name: 设置JDK
         uses: actions/setup-java@v4
         with:
-          java-version: "17"
-          distribution: "zulu"
+          java-version: '23'
+          distribution: 'temurin'
           cache: gradle
 
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
+      - name: 缓存Gradle依赖
+        uses: actions/cache@v3
         with:
-          cache-read-only: false
-          gradle-version: wrapper
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+            ~/.gradle/build-cache-1  # 添加构建缓存路径
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
 
-      - name: Grant execute permission for gradlew
-        run: chmod +x gradlew
+      - name: 授予Gradle执行权限
+        run: chmod +x ./gradlew
 
-      - name: Build with Gradle
-        run: ./gradlew assembleNormalRelease assembleCompatibleRelease -Pversion=${{ github.ref_name }}
+      - name: 构建APK
+        run: |
+          ./gradlew assembleNormalRelease assembleCompatibleRelease \
+          -Pversion=${{ github.ref_name }} \
+          --parallel \
+          --configure-on-demand \
+          --build-cache \
+          --no-daemon
 
       - name: 找到apk并设置输出
         id: locate_apks
@@ -163,5 +166,3 @@ jobs:
           curl -F "chat_id=${{ secrets.TELEGRAM_CHAT_ID }}" \
               -F "document=@\"${{ steps.extract_apks.outputs.signed_compatible }}\"" \
               "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendDocument"
-
-
